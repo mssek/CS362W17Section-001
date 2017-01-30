@@ -9,6 +9,9 @@ import java.util.*;
 public class Player{
   // The Player class represents a single Dominion player
   private final boolean DEBUGGING = true;
+  // Initial cards for each player's Deck
+  private final int startingCopper = 7;
+  private final int startingEstates = 3;
   // Attributes for this class are private
   private final String playerName;
   private final int drawCards = 7;  // inital hand size
@@ -16,18 +19,26 @@ public class Player{
   private int remBuys;
   private int remMoney;
 
-  private Deck hand;
-  private Deck drawPile;
-  private Deck discardPile;
+  private Stack<Card> cardPile;
+  private int drawsRemaining;
+  private ArrayList<Card> hand;
   public GameState gameState;
+
+  private Scanner scan = new Scanner(System.in);
 
   public Player(String pName, GameState game){
     // Constructor for the Player class - sets their name
     this.playerName = pName;
-    this.drawPile = new Deck();         // not shared, empty
-    this.discardPile = new Deck();      // not shared, empty
-    this.hand = new Deck();             // not shared, empty
     this.gameState = game;
+    this.cardPile = new Stack<Card>();
+    this.drawsRemaining = 0;
+    this.hand = new ArrayList<Card>(20);
+    for(int i=0; i<startingCopper; i++)
+      takeFreeCard(gameState.takeCard(Card.COPPER));
+    for(int i=0; i<startingEstates; i++)
+      takeFreeCard(gameState.takeCard(Card.ESTATE));
+    shuffle();
+    cleanupPhase();
   }
 
   public int addMoney(int m){
@@ -45,13 +56,6 @@ public class Player{
     return remBuys;
   }
 
-  public Card chooseHand(){
-    System.out.println("Please choose a card:");
-    seeHand();
-    // Should allow them to select a card
-    return hand.drawCard(1);
-  }
-
   public int getActions(){
     return this.remActions;
   }
@@ -60,89 +64,196 @@ public class Player{
     return this.remBuys;
   }
 
-  public int getDiscardSize(){
-    return this.discardPile.getSize();
-  }
-
-  public int getDrawSize(){
-    return this.discardPile.getSize();
-  }
-
-  public void seeHand(){
-    // Display all cards in a player's hand
-    this.hand.seeDeck();
-  }
-
-  public boolean shuffle(){
-    // Shuffles discardPile and adds it _under_ the drawPile
-    if(drawPile.getSize() > 0) return false;
-    discardPile.shuffle();
-    return drawPile.addAll(discardPile);
-  }
-
-  public void seeDeck(){
-    if(DEBUGGING){
-      System.out.println("Player "+this.playerName+"'s hand:");
-      hand.seeDeck();
-      System.out.println("Player "+this.playerName+"'s drawPile:");
-      drawPile.seeDeck();
-      System.out.println("Player "+this.playerName+"'s discardPile:");
-      discardPile.seeDeck();
+  private void actionPhase(){
+    // Action phase of a player's turn
+    while(remActions >= 1){
+      // Only prompt the player to choose a card if they have Action cards
+      boolean needsChoice = false;
+      System.out.print(playerName+"'s hand contains: ");
+      for(int i=0; i<hand.size(); i++){
+        System.out.format("%s%s", hand.get(i), i+1<hand.size()?", ":".\n");
+        if(hand.get(i).getType() == Card.Type.ACTION) needsChoice = true;
+      }
+      if(needsChoice){
+        System.out.println("Please choose an Action card from your hand.");
+        Card c = chooseActionCard();
+        if(c != null){
+          System.out.println(playerName+" chose to play the "+c+" card.");
+          playCard(c);
+        }else{  // this is ugly
+          return;
+        }
+      }else{
+        return;
+      }
     }
   }
 
-  public boolean discard(){
+  private boolean buyCard(Card c){
+    // System.out.println("Attempting to buy "+c);
+    if( gameState.countCard(c)>0 && remMoney>=c.costsMoney && remBuys>=1){
+      if(discard(gameState.takeCard(c))){
+        remMoney -= c.costsMoney;
+        remBuys--;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void buyPhase(){
+    // Auto convert all Treasure cards and allow player to buy
+    ArrayList<Card> tempHand = new ArrayList<Card>(hand);
+    for(Card c: tempHand){
+      if(c.getType() == Card.Type.TREASURE){
+        playCard(c);
+      }
+    }
+    while(remBuys >= 1){
+      System.out.format("%s has %d buys and %d money to spend.\n",
+        playerName, remBuys, remMoney);
+      // Show a list of cards from the bank
+      int availCards = gameState.listCards();
+      System.out.format("Please enter the card number (1-%d) you want to buy,"+
+        " or 0 to cancel: ", availCards);
+      int choice = scan.nextInt();
+      if( choice>0 && choice<=availCards )
+        buyCard(Card.values()[choice-1]);
+      else if( choice==0 )
+        remBuys = 0;
+    }
+  }
+
+  private void cleanupPhase(){
+    // Discard hand and draw 5 new cards
+    cardPile.addAll(drawsRemaining, hand);
+    hand.clear();
+    // Add 5 new cards from the top of this player's drawPile deck
+    for(int i=0; i<5; i++) {
+      hand.add(draw());
+    }
+    // Reset actions and buys for next turn
+    remActions = 1;
+    remBuys = 1;
+  }
+
+  public Card chooseHand(){
+    for(int i=0; i<hand.size(); i++){
+      System.out.println(i+1+" - "+hand.get(i));
+    }
+    System.out.format("Please enter the card number (1-%d) you want to play,"+
+      " or 0 to cancel: ", hand.size());
+    int choice = scan.nextInt();
+    if( choice>0 && choice<hand.size() )
+      return hand.remove(choice);
+    return null;
+  }
+
+  public Card chooseActionCard(){
+    for(int i=0; i<hand.size(); i++){
+      if(hand.get(i).getType() == Card.Type.ACTION)
+        System.out.println(i+" - "+hand.get(i));
+    }
+    System.out.format("Please enter the card number (1-%d) you want to play,"+
+      " or 0 to cancel: ", hand.size());
+    int choice = scan.nextInt();
+    if( choice>0 && choice<hand.size() )
+      return hand.remove(choice);
+    else if( choice==0 )
+      remActions = 0;
+    return null;
+  }
+
+  public boolean discardRandomFromHand(){
     // This player discards a random card from their hand
-    int handsize = this.hand.getSize();
-    // generate random number in range of hand size
-    Card c = hand.drawCard(1);
+    int handsize = hand.size();
+    // generate random number in range of hand size instead of this
+    Card c = hand.remove(0);
     return discard(c);
   }
+
   public boolean discard(Card c){
-    // Returns result of attempting to move a card from hand to discardPile
-    return discardPile.addCard(hand.drawCard(c));
-  }
-  public boolean discard(Card c, Player target){
-    // Target player discards a specific card
-    return target.discard(c);
+    // Add a card to the discard pile
+    cardPile.add(cardPile.size(), c);
+    return true;
   }
 
   public Card draw(){
-    return draw(drawPile, drawPile.drawCard());
-  }
-  public Card draw(Deck d, Card c){
-    // Take a card from a deck and put it into your discardPile
-    c = d.drawCard(c);
-    discardPile.addCard(c);
+    // System.out.print("Drawing.. "+drawsRemaining+" ->");
+    if(drawsRemaining == 0)
+      drawsRemaining = shuffle();
+    drawsRemaining--;
+    Card c = cardPile.remove(0);
+    // System.out.println(drawsRemaining+"("+c+")");
     return c;
-  }
-
-  public void returnCardToShared(Card c){
-    gameState.bankCards.addCard(c);
   }
 
   public void newTurn(){
     // Start every turn with a new, full hand and 1 action, 1 buy
     if(DEBUGGING) System.out.println("It's "+playerName+"'s turn:");
-    remActions = 1;
-    remBuys = 1;
-    discardPile.addCard(hand.drawAll());
-    // Add 5 new cards from the top of this player's drawPile deck
-    for(int i=0; i<5; i++) hand.addCard(drawPile.drawCard());
-
+    // seeDeck();
+    actionPhase();
+    buyPhase();
+    cleanupPhase();
+    // seeDeck();
+    if(DEBUGGING) System.out.println(playerName+"'s turn is OVER.\n\n");
   }
 
   public boolean playCard(Card card){
     return playCard(card, this);
   }
-  public boolean playCard(Card card, Player target){
-    if(card.costsAction==0 || this.remActions>1){
-      if(DEBUGGING) System.out.println("Playing "+card);
-      card.play(this);
+  public boolean playCard(Card c, Player target){
+    if(c.costsAction==0 || remActions>1){
+      remActions -= c.costsAction;
+      // if(DEBUGGING) System.out.println("Playing "+c);
+      c.play(this);
+      hand.remove(hand.indexOf(c));
+      discard(c);
     } else {
-      System.out.println("You do not have an action to play "+card);
+      System.out.println("You do not have an action to play "+c);
     }
     return true;
   }
 
+  public void returnCardToShared(Card c){
+    // gameState.bankCards.push(c);
+  }
+
+  public void seeDeck(){
+    if(DEBUGGING){
+      System.out.println("Player "+playerName+"'s hand:");
+      seeHand();
+      System.out.println("Player "+playerName+"'s drawPile:");
+      for(int i=0; i<drawsRemaining; i++){
+        System.out.println(cardPile.elementAt(i));
+      }
+      System.out.println("Player "+playerName+"'s discardPile:");
+      for(int i=drawsRemaining; i<cardPile.size(); i++){
+        System.out.println(cardPile.elementAt(i));
+      }
+      System.out.println("drawsRemaining = "+drawsRemaining);
+    }
+  }
+
+  public void seeHand(){
+    // Display all cards in a player's hand
+    for(Card c: hand){
+      System.out.println(c);
+    }
+  }
+
+  public int shuffle(){
+    Collections.shuffle(cardPile);
+    drawsRemaining = cardPile.size();
+    return drawsRemaining;
+  }
+
+  public boolean takeFreeCard(Card c){
+    return discard(c);
+  }
+
+  @Override
+  public String toString() {
+    return this.playerName;
+  }
 }
